@@ -1,7 +1,9 @@
 #include <assert.h>
 #include <err.h>
+#include <errno.h>
 #include <menu.h>
 #include <ncurses.h>
+#include <poll.h>
 #include <sndio.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,6 +40,8 @@ ondesc_cb(void *arg, struct sioctl_desc *desc, int val)
 	struct sw_devs *devs = arg;
 	(void) val;
 
+	/* XXX this should add/delete controls like `sndioctl -m` does */
+
 	/* Note that we need space for a NULL sentinel in `devs->items` */
 	if ((desc == NULL) || (devs->num == SW_MAXDEV - 1))
 		return;
@@ -70,13 +74,30 @@ ondesc_cb(void *arg, struct sioctl_desc *desc, int val)
 }
 
 void
+clear_devs(struct sw_devs *devs) {
+	unsigned int i;
+
+	for (i = 0; i < devs->num; i++) {
+		free_item(devs->items[i]);
+		free(devs->displays[i]);
+	}
+	memset(devs, 0, sizeof(struct sw_devs));
+}
+
+void
 do_menu(struct sioctl_hdl *hdl, char *argv0)
 {
 	MENU *menu;
-	int key, exit = 0;
-	unsigned int i;
+	int exit = 0, nfds, poll_rv;
 	struct sw_devs devs;
 	WINDOW *title_win, *menu_win, *status_win;
+	struct pollfd *pfds;
+
+	pfds = malloc(sizeof(struct pollfd) * sioctl_nfds(hdl));
+	if (pfds == NULL) {
+		endwin();
+		err(EXIT_FAILURE, "malloc");
+	}
 
 	memset(&devs, 0, sizeof(struct sw_devs));
 	if (sioctl_ondesc(hdl, ondesc_cb, &devs) == 0) {
@@ -119,8 +140,39 @@ do_menu(struct sioctl_hdl *hdl, char *argv0)
 	wrefresh(status_win);
 
 	while(!exit) {
-		key = getch();
-		switch(key) {
+		/* Check for sndio control changes */
+		system("notify-send loop");
+		nfds = sioctl_pollfd(hdl, pfds, POLLIN);
+		while ((poll_rv = poll(pfds, nfds, 100)) < 0) {
+			system("notify-send minus one");
+			if (errno != EINTR) {
+				endwin();
+				err(EXIT_FAILURE, "poll");
+			}
+		}
+		if (poll_rv > 0) {
+			/* Something changed. Repopulate the menu */
+			system("notify-send new");
+			unpost_menu(menu);
+			free_menu(menu);
+			clear_devs(&devs); /* XXX wrong */
+			sioctl_revents(hdl, pfds);
+			if (devs.num == 0) {
+				endwin();
+				errx(EXIT_FAILURE, "no devices"); /* XXX don't do this */
+			}
+
+			/* XXX duplication */
+			menu = new_menu(devs.items);
+			set_menu_win(menu, menu_win);
+			set_menu_fore(menu, COLOR_PAIR(COLPAIR_MENU_FORE) | A_REVERSE);
+			set_menu_back(menu, COLOR_PAIR(COLPAIR_MENU_BACK) | A_REVERSE);
+			post_menu(menu);
+			wrefresh(menu_win);
+		}
+
+		// Drive the menu.
+		switch(getch()) {
 			case KEY_DOWN:
 				menu_driver(menu, REQ_DOWN_ITEM);
 				break;
@@ -150,11 +202,7 @@ do_menu(struct sioctl_hdl *hdl, char *argv0)
 		wrefresh(menu_win);
 	}
 
-	for (i = 0; i < devs.num; i++) {
-		free_item(devs.items[i]);
-		free(devs.displays[i]);
-	}
-
+	clear_devs(&devs);
 	unpost_menu(menu);
 	free_menu(menu);
 }
