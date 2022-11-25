@@ -8,9 +8,6 @@
 #include <string.h>
 #include <unistd.h>
 
-/* The maximum number of devices that can appear in the menu */
-#define SW_MAXDEV 16
-
 /* Colour pairs */
 #define COLPAIR_MENU_FORE 1
 #define COLPAIR_MENU_BACK 2
@@ -18,54 +15,82 @@
 
 #define MENU_WIDTH (COLS - 4)
 
-/* Table of audio devices */
-struct sw_devs {
-	/* Number of entries */
-	unsigned int num;
-	/* sndio control addresses */
-	unsigned int addrs[SW_MAXDEV];
-	/* sndio device names */
-	char names[SW_MAXDEV][SIOCTL_NAMEMAX];
-	/* device display strings */
-	char *displays[SW_MAXDEV];
-	/* ncurses menu items */
-	ITEM *items[SW_MAXDEV];
+/* A node in the audio device linked list */
+struct sw_dev {
+	/* The sndio address of the `device` control */
+	int addr;
+	/* The "name" of the device */
+	char name[SIOCTL_NAMEMAX];
+	/* The display string of the device */
+	char *display;
+	/* The ncurses menu item for this device */
+	ITEM *item;
+	/* The next device in the linked list */
+	struct sw_dev *next;
 };
+
+size_t
+num_devs(struct sw_dev *devs)
+{
+	size_t n = 0;
+	while (devs != NULL) {
+		n++;
+		devs = devs->next;
+	}
+	return n;
+}
+
+void
+free_devs(struct sw_dev **devs)
+{
+	struct sw_dev *old;
+
+	while (*devs != NULL) {
+		free_item((*devs)->item);
+		free((*devs)->display);
+		old = *devs;
+		*devs = (*devs)->next;
+		free(old);
+	}
+}
 
 void
 ondesc_cb(void *arg, struct sioctl_desc *desc, int val)
 {
-	struct sw_devs *devs = arg;
+	struct sw_dev **devs = arg;
+	struct sw_dev *d;
 	(void) val;
 
-	/* Note that we need space for a NULL sentinel in `devs->items` */
-	if ((desc == NULL) || (devs->num == SW_MAXDEV - 1))
+	if (desc == NULL)
 		return;
 
 	if ((desc->type == SIOCTL_SEL) &&
 	    (strcmp(desc->node0.name, "server") == 0) &&
 	    (strcmp(desc->func, "device") == 0))
 	{
-		devs->addrs[devs->num] = desc->addr;
-		strlcpy(devs->names[devs->num], desc->node1.name,
-		    SIOCTL_NAMEMAX);
+		d = malloc(sizeof(struct sw_dev));
+		if (d == NULL) {
+			endwin();
+			err(EXIT_FAILURE, "malloc");
+		}
 
-		devs->displays[devs->num] = malloc(MENU_WIDTH);
-		if (devs->displays[devs->num] == NULL) {
+		d->addr = desc->addr;
+		strlcpy(d->name, desc->node1.name, SIOCTL_NAMEMAX);
+		d->display = malloc(MENU_WIDTH);
+
+		if (d->display == NULL) {
 			endwin();
 			errx(EXIT_FAILURE, "malloc() failed");
 		}
-		memset(devs->displays[devs->num], ' ', MENU_WIDTH);
-		strncpy(devs->displays[devs->num],desc->display,
-		    strlen(desc->display));
-		devs->displays[devs->num][MENU_WIDTH] = 0;
+		memset(d->display, ' ', MENU_WIDTH);
+		strncpy(d->display, desc->display, strlen(desc->display));
+		d->display[MENU_WIDTH] = 0;
 
-		devs->items[devs->num] = new_item(devs->names[devs->num],
-		    devs->displays[devs->num]);
-		set_item_userptr(devs->items[devs->num],
-		    &devs->addrs[devs->num]);
+		d->item = new_item(d->name, d->display);
+		set_item_userptr(d->item, &d->addr);
 
-		devs->num++;
+		d->next = *devs;
+		*devs = d;
 	}
 }
 
@@ -73,20 +98,15 @@ void
 do_menu(struct sioctl_hdl *hdl, char *argv0)
 {
 	MENU *menu;
-	int key, exit = 0;
-	unsigned int i;
-	struct sw_devs devs;
+	int key, exit = 0, i;
+	struct sw_dev *devs = NULL, *d;
+	size_t ndev;
 	WINDOW *title_win, *menu_win, *status_win;
+	ITEM **items;
 
-	memset(&devs, 0, sizeof(struct sw_devs));
 	if (sioctl_ondesc(hdl, ondesc_cb, &devs) == 0) {
 		endwin();
 		errx(EXIT_FAILURE, "sioctl_desc() failed");
-	}
-
-	if (devs.num == 0) {
-		endwin();
-		errx(EXIT_FAILURE, "no viable audio devices");
 	}
 
 	/* Create the bar at the top */
@@ -95,13 +115,25 @@ do_menu(struct sioctl_hdl *hdl, char *argv0)
 	mvwprintw(title_win, 0, 0, "Select default sndio device");
 
 	/* Create the menu */
+	ndev = num_devs(devs);
 	menu_win = newwin(
-	    devs.num,   /* height */
+	    ndev,   /* height */
 	    MENU_WIDTH, /* width */
-	    (LINES - devs.num) / 2, /* ypos */
+	    (LINES - ndev) / 2, /* ypos */
 	    (COLS - MENU_WIDTH) / 2 /* xpos */
 	);
-	menu = new_menu(devs.items);
+
+	items = calloc(ndev + 1, sizeof(ITEM *));
+	if (items == NULL) {
+		endwin();
+		err(EXIT_FAILURE, "malloc");
+	}
+	for (i = 0, d = devs; d != NULL; d = d->next, i++) {
+		items[i] = d->item;
+	}
+	items[ndev] = NULL;
+
+	menu = new_menu(items);
 	set_menu_win(menu, menu_win);
 	set_menu_fore(menu, COLOR_PAIR(COLPAIR_MENU_FORE) | A_REVERSE);
 	set_menu_back(menu, COLOR_PAIR(COLPAIR_MENU_BACK) | A_REVERSE);
@@ -150,13 +182,10 @@ do_menu(struct sioctl_hdl *hdl, char *argv0)
 		wrefresh(menu_win);
 	}
 
-	for (i = 0; i < devs.num; i++) {
-		free_item(devs.items[i]);
-		free(devs.displays[i]);
-	}
-
+	free_devs(&devs);
 	unpost_menu(menu);
 	free_menu(menu);
+	free(items);
 }
 
 int
