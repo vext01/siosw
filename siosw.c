@@ -1,7 +1,9 @@
 #include <assert.h>
 #include <err.h>
+#include <errno.h>
 #include <menu.h>
 #include <ncurses.h>
+#include <poll.h>
 #include <sndio.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,7 +20,7 @@
 /* A node in the audio device linked list */
 struct sw_dev {
 	/* The sndio address of the `device` control */
-	int addr;
+	unsigned int addr;
 	/* The "name" of the device */
 	char name[SIOCTL_NAMEMAX];
 	/* The display string of the device */
@@ -57,17 +59,42 @@ free_devs(struct sw_dev **devs)
 void
 ondesc_cb(void *arg, struct sioctl_desc *desc, int val)
 {
-	struct sw_dev **devs = arg;
-	struct sw_dev *d;
+	struct sw_dev **devs = arg, *d;
 	(void) val;
 
 	if (desc == NULL)
 		return;
 
-	if ((desc->type == SIOCTL_SEL) &&
-	    (strcmp(desc->node0.name, "server") == 0) &&
+	if ((strcmp(desc->node0.name, "server") == 0) &&
 	    (strcmp(desc->func, "device") == 0))
 	{
+		/* It's a `server.device` control */
+		if (desc->type == SIOCTL_NONE) {
+			/* device is being deleted */
+
+			char *x;
+			asprintf(&x, "notify-send 'del: %d'", desc->addr);
+			system(x);
+
+			for (; *devs != NULL; devs = &d->next) {
+				d = *devs;
+				if ((*devs)->addr == desc->addr) {
+					*devs = d->next;
+					/* XXX free d and stuff inside */
+					return;
+				}
+			}
+			endwin();
+			errx(EXIT_FAILURE, "unreachable");
+		}
+
+		char *a;
+		asprintf(&a, "notify-send 'add: %d'", desc->addr);
+		system(a);
+
+		/* otherwise it's a newly appearing device */
+		assert(desc->type == SIOCTL_SEL);
+
 		d = malloc(sizeof(struct sw_dev));
 		if (d == NULL) {
 			endwin();
@@ -94,29 +121,18 @@ ondesc_cb(void *arg, struct sioctl_desc *desc, int val)
 	}
 }
 
-void
-do_menu(struct sioctl_hdl *hdl, char *argv0)
+MENU *
+create_menu(struct sw_dev *devs)
 {
-	MENU *menu;
-	int key, exit = 0, i;
-	struct sw_dev *devs = NULL, *d;
-	size_t ndev;
-	WINDOW *title_win, *menu_win, *status_win;
+	size_t ndev, i;
 	ITEM **items;
-
-	if (sioctl_ondesc(hdl, ondesc_cb, &devs) == 0) {
-		endwin();
-		errx(EXIT_FAILURE, "sioctl_desc() failed");
-	}
-
-	/* Create the bar at the top */
-	title_win = newwin(1, COLS, 0, 0);
-	wbkgd(title_win, COLOR_PAIR(COLPAIR_STATUS));
-	mvwprintw(title_win, 0, 0, "Select default sndio device");
+	MENU *menu;
+	WINDOW *mwin;
+	struct sw_dev *d;
 
 	/* Create the menu */
 	ndev = num_devs(devs);
-	menu_win = newwin(
+	mwin = newwin(
 	    ndev,   /* height */
 	    MENU_WIDTH, /* width */
 	    (LINES - ndev) / 2, /* ypos */
@@ -128,41 +144,102 @@ do_menu(struct sioctl_hdl *hdl, char *argv0)
 		endwin();
 		err(EXIT_FAILURE, "malloc");
 	}
-	for (i = 0, d = devs; d != NULL; d = d->next, i++) {
+	for (i = 0, d = devs; d != NULL; d = d->next, i++)
 		items[i] = d->item;
-	}
 	items[ndev] = NULL;
 
 	menu = new_menu(items);
-	set_menu_win(menu, menu_win);
+	set_menu_win(menu, mwin);
 	set_menu_fore(menu, COLOR_PAIR(COLPAIR_MENU_FORE) | A_REVERSE);
 	set_menu_back(menu, COLOR_PAIR(COLPAIR_MENU_BACK) | A_REVERSE);
+
+	return menu;
+}
+
+void
+sw_free_menu(MENU *menu)
+{
+	ITEM **items;
+	WINDOW *mwin;
+
+	items = menu_items(menu);
+	mwin = menu_win(menu);
+	free_menu(menu);
+	free(items);
+	delwin(mwin);
+}
+
+void
+do_menu(struct sioctl_hdl *hdl)
+{
+	MENU *menu;
+	int exit = 0, poll_rv, nfds;
+	struct sw_dev *devs = NULL;
+	WINDOW *title_win, *status_win;
+	struct pollfd *pfds;
+
+	pfds = malloc(sizeof(struct pollfd) * sioctl_nfds(hdl));
+	if (pfds == NULL) {
+		endwin();
+		err(EXIT_FAILURE, "malloc");
+	}
+
+	if (sioctl_ondesc(hdl, ondesc_cb, &devs) == 0) {
+		endwin();
+		errx(EXIT_FAILURE, "sioctl_desc() failed");
+	}
+
+	/* Create the bar at the top */
+	title_win = newwin(1, COLS, 0, 0);
+	wbkgd(title_win, COLOR_PAIR(COLPAIR_STATUS));
+	mvwprintw(title_win, 0, 0, "Select default sndio device");
+
+	menu = create_menu(devs);
 	post_menu(menu);
 
 	/* Create the bar at the bottom */
 	status_win = newwin(1, COLS, LINES - 1, 0);
 	wbkgd(status_win, COLOR_PAIR(COLPAIR_STATUS));
 	mvwprintw(status_win, 0, 0,
-	    "[Return]: change audio device, [r] refresh list, [q]: exit");
+	    "[Return]: change audio device, [q]: exit");
 
 	refresh();
 	wrefresh(title_win);
-	wrefresh(menu_win);
+	wrefresh(menu_win(menu));
 	wrefresh(status_win);
 
 	while(!exit) {
-		key = getch();
-		switch(key) {
+		/* Check for sndio device changes */
+		nfds = sioctl_pollfd(hdl, pfds, POLLIN);
+		while ((poll_rv = poll(pfds, nfds, 100)) < 0) {
+			if (errno != EINTR) {
+				endwin();
+				err(EXIT_FAILURE, "poll");
+			}
+		}
+		if (poll_rv > 0) {
+			/* Something changed. Repopulate the menu */
+			unpost_menu(menu);
+			sw_free_menu(menu);
+
+			 /* calls ondesc_cb with changes */
+			sioctl_revents(hdl, pfds);
+
+			/* XXX duplication */
+			menu = create_menu(devs);
+			post_menu(menu);
+			wrefresh(menu_win(menu));
+		}
+
+		switch(getch()) {
+			case ERR:
+				/* no keypresses available */
+				continue;
 			case KEY_DOWN:
 				menu_driver(menu, REQ_DOWN_ITEM);
 				break;
 			case KEY_UP:
 				menu_driver(menu, REQ_UP_ITEM);
-				break;
-			case 'r':
-				execl(argv0, argv0, NULL);
-				endwin();
-				err(EXIT_FAILURE, "execl() failed");
 				break;
 			case '\n':
 				if (sioctl_setval(hdl, *((unsigned int *)
@@ -179,13 +256,14 @@ do_menu(struct sioctl_hdl *hdl, char *argv0)
 				exit = 1;
 				break;
 		}
-		wrefresh(menu_win);
+		wrefresh(menu_win(menu));
 	}
 
-	free_devs(&devs);
 	unpost_menu(menu);
-	free_menu(menu);
-	free(items);
+	sw_free_menu(menu);
+	delwin(status_win);
+	delwin(title_win);
+	free_devs(&devs);
 }
 
 int
@@ -193,6 +271,7 @@ main(int argc, char **argv)
 {
 	struct sioctl_hdl *hdl = NULL;
 	(void) argc;
+	(void) argv;
 
 	hdl = sioctl_open(SIO_DEVANY, SIOCTL_WRITE, 0);
 	if (hdl == NULL)
@@ -203,13 +282,14 @@ main(int argc, char **argv)
 	noecho();
 	curs_set(0);
 	keypad(stdscr, TRUE);
+	timeout(0); /* non-blocking getch() */
 
 	start_color();
 	init_pair(COLPAIR_MENU_FORE, COLOR_YELLOW, COLOR_BLACK);
 	init_pair(COLPAIR_MENU_BACK, COLOR_WHITE, COLOR_BLACK);
 	init_pair(COLPAIR_STATUS, COLOR_BLACK, COLOR_BLUE);
 
-	do_menu(hdl, argv[0]);
+	do_menu(hdl);
 
 	endwin();
 	sioctl_close(hdl);
