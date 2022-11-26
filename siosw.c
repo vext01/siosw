@@ -180,10 +180,10 @@ void
 sw_do_menu(struct sioctl_hdl *hdl)
 {
 	MENU *menu;
-	int exit = 0, poll_rv, nfds;
+	int exit = 0, poll_rv, sio_nfds, nfds, i, again;
 	struct sw_dev *devs = NULL;
 	WINDOW *title_win, *status_win;
-	struct pollfd *pfds;
+	struct pollfd *pfds, *sio_pfds;
 
 	if (sioctl_ondesc(hdl, sw_ondesc_cb, &devs) == 0) {
 		endwin();
@@ -209,57 +209,58 @@ sw_do_menu(struct sioctl_hdl *hdl)
 	wrefresh(menu_win(menu));
 	wrefresh(status_win);
 
-	/* +1 for stdin */
-	nfds = sioctl_nfds(hdl) + 1;
-
-	char *a;
-	asprintf(&a, "notify-send 'nfds=%d'", nfds);
-	system(a);
-
+	sio_nfds = sioctl_nfds(hdl);
+	nfds = sio_nfds + 1; /* +1 for stdin at index 0 */
 	pfds = malloc(sizeof(struct pollfd) * nfds);
 	if (pfds == NULL) {
 		endwin();
 		err(EXIT_FAILURE, "malloc");
 	}
+	sio_pfds = pfds + 1;
 
 	pfds[0].fd = STDIN_FILENO;
 	pfds[0].events = POLLIN;
 	pfds[0].revents = 0;
 
 	while(!exit) {
-		/* Check for sndio device changes */
-		sioctl_pollfd(hdl, pfds + 1, POLLIN);
+		/* Check for key events or sndio device changes */
+		sioctl_pollfd(hdl, sio_pfds, POLLIN);
 		while ((poll_rv = poll(pfds, nfds, INFTIM)) < 0) {
 			if (errno != EINTR) {
 				endwin();
 				err(EXIT_FAILURE, "poll");
 			}
 		}
+
+		again = 0;
 		if (poll_rv > 0) {
 			/*
-			 * poll woke up, if it was because of any sio device
-			 * change, then we have to update the menu
+			 * `poll()` woke up, if it was because of any sio
+			 * device change, then we have to update the menu.
 			 */
-			for (int i = 1; i < nfds; i++) {
-				if (pfds[i].revents & POLLIN) {
-					system("notify-send dev");
-					/* Device changed. Repopulate the menu */
+			for (i = 0; i < sio_nfds; i++) {
+				if (sio_pfds[i].revents & POLLIN) {
+					/* Device changed. Repopulate menu */
 					unpost_menu(menu);
 					wrefresh(menu_win(menu));
 					sw_free_menu(menu);
 
-					/* Update the device list (calls `ondesc_cb`) */
-					sioctl_revents(hdl, pfds + 1);
+					/* XXX loop until ondesc called with NULL */
+					sioctl_revents(hdl, sio_pfds);
 
 					menu = sw_create_menu(devs);
 					post_menu(menu);
 					wrefresh(menu_win(menu));
 					refresh();
 
+					again = 1;
 					break;
 				}
 			}
 		}
+
+		if (again)
+			continue;
 
 		switch(getch()) {
 			case ERR:
@@ -313,7 +314,6 @@ main(int argc, char **argv)
 	noecho();
 	curs_set(0);
 	keypad(stdscr, TRUE);
-	//timeout(0); /* non-blocking getch() */
 
 	start_color();
 	init_pair(COLPAIR_MENU_FORE, COLOR_YELLOW, COLOR_BLACK);
