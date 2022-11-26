@@ -65,60 +65,49 @@ ondesc_cb(void *arg, struct sioctl_desc *desc, int val)
 	if (desc == NULL)
 		return;
 
-	if ((strcmp(desc->node0.name, "server") == 0) &&
-	    (strcmp(desc->func, "device") == 0))
-	{
-		/* It's a `server.device` control */
-		if (desc->type == SIOCTL_NONE) {
-			/* device is being deleted */
+	if (!((strcmp(desc->node0.name, "server") == 0) &&
+	    (strcmp(desc->func, "device") == 0)))
+		return; /* It's not a `server.device` control */
 
-			char *x;
-			asprintf(&x, "notify-send 'del: %d'", desc->addr);
-			system(x);
-
-			for (; *devs != NULL; devs = &d->next) {
-				d = *devs;
-				if ((*devs)->addr == desc->addr) {
-					*devs = d->next;
-					/* XXX free d and stuff inside */
-					return;
-				}
-			}
-			endwin();
-			errx(EXIT_FAILURE, "unreachable");
+	/* first delete the control */
+	for (; *devs != NULL; devs = &d->next) {
+		d = *devs;
+		if ((*devs)->addr == desc->addr) {
+			*devs = d->next;
+			/* XXX free d and stuff inside */
+			break;
 		}
-
-		char *a;
-		asprintf(&a, "notify-send 'add: %d'", desc->addr);
-		system(a);
-
-		/* otherwise it's a newly appearing device */
-		assert(desc->type == SIOCTL_SEL);
-
-		d = malloc(sizeof(struct sw_dev));
-		if (d == NULL) {
-			endwin();
-			err(EXIT_FAILURE, "malloc");
-		}
-
-		d->addr = desc->addr;
-		strlcpy(d->name, desc->node1.name, SIOCTL_NAMEMAX);
-		d->display = malloc(MENU_WIDTH);
-
-		if (d->display == NULL) {
-			endwin();
-			errx(EXIT_FAILURE, "malloc() failed");
-		}
-		memset(d->display, ' ', MENU_WIDTH);
-		strncpy(d->display, desc->display, strlen(desc->display));
-		d->display[MENU_WIDTH] = 0;
-
-		d->item = new_item(d->name, d->display);
-		set_item_userptr(d->item, &d->addr);
-
-		d->next = *devs;
-		*devs = d;
 	}
+
+	if (desc->type == SIOCTL_NONE)
+		return;
+
+	/* otherwise it's a newly appearing device */
+	assert(desc->type == SIOCTL_SEL);
+
+	d = malloc(sizeof(struct sw_dev));
+	if (d == NULL) {
+		endwin();
+		err(EXIT_FAILURE, "malloc");
+	}
+
+	d->addr = desc->addr;
+	strlcpy(d->name, desc->node1.name, SIOCTL_NAMEMAX);
+	d->display = malloc(MENU_WIDTH);
+
+	if (d->display == NULL) {
+		endwin();
+		errx(EXIT_FAILURE, "malloc() failed");
+	}
+	memset(d->display, ' ', MENU_WIDTH);
+	strncpy(d->display, desc->display, strlen(desc->display));
+	d->display[MENU_WIDTH] = 0;
+
+	d->item = new_item(d->name, d->display);
+	set_item_userptr(d->item, &d->addr);
+
+	d->next = *devs;
+	*devs = d;
 }
 
 MENU *
@@ -220,15 +209,16 @@ do_menu(struct sioctl_hdl *hdl)
 		if (poll_rv > 0) {
 			/* Something changed. Repopulate the menu */
 			unpost_menu(menu);
+			wrefresh(menu_win(menu));
 			sw_free_menu(menu);
 
-			 /* calls ondesc_cb with changes */
+			 /* Update the device list (calls `ondesc_cb`) */
 			sioctl_revents(hdl, pfds);
 
-			/* XXX duplication */
 			menu = create_menu(devs);
 			post_menu(menu);
 			wrefresh(menu_win(menu));
+			refresh();
 		}
 
 		switch(getch()) {
