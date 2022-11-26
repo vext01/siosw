@@ -209,34 +209,56 @@ sw_do_menu(struct sioctl_hdl *hdl)
 	wrefresh(menu_win(menu));
 	wrefresh(status_win);
 
-	pfds = malloc(sizeof(struct pollfd) * sioctl_nfds(hdl));
+	/* +1 for stdin */
+	nfds = sioctl_nfds(hdl) + 1;
+
+	char *a;
+	asprintf(&a, "notify-send 'nfds=%d'", nfds);
+	system(a);
+
+	pfds = malloc(sizeof(struct pollfd) * nfds);
 	if (pfds == NULL) {
 		endwin();
 		err(EXIT_FAILURE, "malloc");
 	}
 
+	pfds[0].fd = STDIN_FILENO;
+	pfds[0].events = POLLIN;
+	pfds[0].revents = 0;
+
 	while(!exit) {
 		/* Check for sndio device changes */
-		nfds = sioctl_pollfd(hdl, pfds, POLLIN);
-		while ((poll_rv = poll(pfds, nfds, 100)) < 0) {
+		sioctl_pollfd(hdl, pfds + 1, POLLIN);
+		while ((poll_rv = poll(pfds, nfds, INFTIM)) < 0) {
 			if (errno != EINTR) {
 				endwin();
 				err(EXIT_FAILURE, "poll");
 			}
 		}
 		if (poll_rv > 0) {
-			/* Something changed. Repopulate the menu */
-			unpost_menu(menu);
-			wrefresh(menu_win(menu));
-			sw_free_menu(menu);
+			/*
+			 * poll woke up, if it was because of any sio device
+			 * change, then we have to update the menu
+			 */
+			for (int i = 1; i < nfds; i++) {
+				if (pfds[i].revents & POLLIN) {
+					system("notify-send dev");
+					/* Device changed. Repopulate the menu */
+					unpost_menu(menu);
+					wrefresh(menu_win(menu));
+					sw_free_menu(menu);
 
-			 /* Update the device list (calls `ondesc_cb`) */
-			sioctl_revents(hdl, pfds);
+					/* Update the device list (calls `ondesc_cb`) */
+					sioctl_revents(hdl, pfds + 1);
 
-			menu = sw_create_menu(devs);
-			post_menu(menu);
-			wrefresh(menu_win(menu));
-			refresh();
+					menu = sw_create_menu(devs);
+					post_menu(menu);
+					wrefresh(menu_win(menu));
+					refresh();
+
+					break;
+				}
+			}
 		}
 
 		switch(getch()) {
@@ -291,7 +313,7 @@ main(int argc, char **argv)
 	noecho();
 	curs_set(0);
 	keypad(stdscr, TRUE);
-	timeout(0); /* non-blocking getch() */
+	//timeout(0); /* non-blocking getch() */
 
 	start_color();
 	init_pair(COLPAIR_MENU_FORE, COLOR_YELLOW, COLOR_BLACK);
