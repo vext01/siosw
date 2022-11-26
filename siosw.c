@@ -233,32 +233,36 @@ sw_do_menu(struct sioctl_hdl *hdl)
 		}
 
 		again = 0;
-		if (poll_rv > 0) {
-			/*
-			 * `poll()` woke up, if it was because of any sio
-			 * device change, then we have to update the menu.
-			 */
-			for (i = 0; i < sio_nfds; i++) {
-				if (sio_pfds[i].revents & POLLIN) {
-					/* Device changed. Repopulate menu */
-					unpost_menu(menu);
-					wrefresh(menu_win(menu));
-					sw_free_menu(menu);
 
-					/* XXX loop until ondesc called with NULL */
-					sioctl_revents(hdl, sio_pfds);
+		/*
+		 * `poll()` woke up, if it was because of any sio
+		 * device change, then we have to update the menu.
+		 */
+		for (i = 0; i < sio_nfds; i++) {
+			if (sio_pfds[i].revents & POLLIN) {
+				/* Device changed. Repopulate menu */
+				unpost_menu(menu);
+				wrefresh(menu_win(menu));
+				sw_free_menu(menu);
 
-					menu = sw_create_menu(devs);
-					post_menu(menu);
-					wrefresh(menu_win(menu));
-					refresh();
+				/* XXX loop until ondesc called with NULL */
+				sioctl_revents(hdl, sio_pfds);
 
-					again = 1;
-					break;
-				}
+				menu = sw_create_menu(devs);
+				post_menu(menu);
+				wrefresh(menu_win(menu));
+				refresh();
+
+				again = 1;
+				break;
 			}
 		}
 
+		/*
+		 * If the devices changed, re-run the menu to avoid the race
+		 * where the user hits enter on a device which subsequently
+		 * changed.
+		 */
 		if (again)
 			continue;
 
