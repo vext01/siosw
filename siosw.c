@@ -272,6 +272,7 @@ sw_do_menu(struct sioctl_hdl *hdl)
 	delwin(status_win);
 	delwin(title_win);
 	sw_free_devs(devs);
+	free(pfds);
 }
 
 int
