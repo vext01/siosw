@@ -49,7 +49,7 @@ void
 sw_free_dev(struct sw_dev *d)
 {
 	free_item(d->item);
-	//free(d->display); /* XXX: why does this crash with strict malloc flags? */
+	free(d->display);
 	free(d);
 }
 
@@ -111,7 +111,7 @@ sw_ondesc_cb(void *arg, struct sioctl_desc *desc, int val)
 	}
 	memset(d->display, ' ', MENU_WIDTH);
 	strncpy(d->display, desc->display, strlen(desc->display));
-	d->display[MENU_WIDTH] = 0;
+	d->display[MENU_WIDTH - 1] = 0;
 
 	d->item = new_item(d->name, d->display);
 	set_item_userptr(d->item, &d->addr);
