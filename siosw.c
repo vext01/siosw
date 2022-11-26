@@ -66,34 +66,10 @@ sw_free_devs(struct sw_dev *devs)
 	}
 }
 
-void
-sw_ondesc_cb(void *arg, struct sioctl_desc *desc, int val)
+struct sw_dev *
+sw_new_dev(struct sioctl_desc *desc)
 {
-	struct sw_dev **devs = arg, *d;
-	(void) val;
-
-	if (desc == NULL)
-		return;
-
-	if (!((strcmp(desc->node0.name, "server") == 0) &&
-	    (strcmp(desc->func, "device") == 0)))
-		return; /* It's not a `server.device` control */
-
-	/* first delete the control */
-	for (; *devs != NULL; devs = &d->next) {
-		d = *devs;
-		if ((*devs)->addr == desc->addr) {
-			*devs = d->next;
-			sw_free_dev(d);
-			break;
-		}
-	}
-
-	if (desc->type == SIOCTL_NONE)
-		return;
-
-	/* otherwise it's a newly appearing device */
-	assert(desc->type == SIOCTL_SEL);
+	struct sw_dev *d;
 
 	d = malloc(sizeof(struct sw_dev));
 	if (d == NULL) {
@@ -116,6 +92,38 @@ sw_ondesc_cb(void *arg, struct sioctl_desc *desc, int val)
 	d->item = new_item(d->name, d->display);
 	set_item_userptr(d->item, &d->addr);
 
+	return d;
+}
+
+void
+sw_ondesc_cb(void *arg, struct sioctl_desc *desc, int val)
+{
+	struct sw_dev **devs = arg, *d;
+	(void) val;
+
+	if (desc == NULL)
+		return;
+
+	if (!((strcmp(desc->node0.name, "server") == 0) &&
+	    (strcmp(desc->func, "device") == 0)))
+		return; /* It's not a `server.device` control */
+
+	/* first delete the control if it already exists */
+	for (; *devs != NULL; devs = &d->next) {
+		d = *devs;
+		if ((*devs)->addr == desc->addr) {
+			*devs = d->next;
+			sw_free_dev(d);
+			break;
+		}
+	}
+
+	if (desc->type == SIOCTL_NONE)
+		return; /* device is being deleted, so don't recreate */
+
+	/* create or recreate the control */
+	assert(desc->type == SIOCTL_SEL);
+	d = sw_new_dev(desc);
 	d->next = *devs;
 	*devs = d;
 }
