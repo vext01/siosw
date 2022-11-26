@@ -185,12 +185,6 @@ sw_do_menu(struct sioctl_hdl *hdl)
 	WINDOW *title_win, *status_win;
 	struct pollfd *pfds;
 
-	pfds = malloc(sizeof(struct pollfd) * sioctl_nfds(hdl));
-	if (pfds == NULL) {
-		endwin();
-		err(EXIT_FAILURE, "malloc");
-	}
-
 	if (sioctl_ondesc(hdl, sw_ondesc_cb, &devs) == 0) {
 		endwin();
 		errx(EXIT_FAILURE, "sioctl_desc() failed");
@@ -214,6 +208,12 @@ sw_do_menu(struct sioctl_hdl *hdl)
 	wrefresh(title_win);
 	wrefresh(menu_win(menu));
 	wrefresh(status_win);
+
+	pfds = malloc(sizeof(struct pollfd) * sioctl_nfds(hdl));
+	if (pfds == NULL) {
+		endwin();
+		err(EXIT_FAILURE, "malloc");
+	}
 
 	while(!exit) {
 		/* Check for sndio device changes */
