@@ -49,19 +49,20 @@ void
 free_dev(struct sw_dev *d)
 {
 	free_item(d->item);
-	free(d->display);
+	//free(d->display); /* XXX: why does this crash with strict malloc flags? */
 	free(d);
 }
 
 void
-free_devs(struct sw_dev **devs)
+free_devs(struct sw_dev *devs)
 {
 	struct sw_dev *next;
 
-	while (*devs != NULL) {
-		next = (*devs)->next;
-		free_dev(*devs);
-		*devs = next;
+	endwin();
+	while (devs != NULL) {
+		next = devs->next;
+		free_dev(devs);
+		devs = next;
 	}
 }
 
@@ -102,8 +103,8 @@ ondesc_cb(void *arg, struct sioctl_desc *desc, int val)
 
 	d->addr = desc->addr;
 	strlcpy(d->name, desc->node1.name, SIOCTL_NAMEMAX);
-	d->display = malloc(MENU_WIDTH);
 
+	d->display = malloc(MENU_WIDTH);
 	if (d->display == NULL) {
 		endwin();
 		errx(EXIT_FAILURE, "malloc() failed");
@@ -262,7 +263,7 @@ do_menu(struct sioctl_hdl *hdl)
 	sw_free_menu(menu);
 	delwin(status_win);
 	delwin(title_win);
-	free_devs(&devs);
+	free_devs(devs);
 }
 
 int
