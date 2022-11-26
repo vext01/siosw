@@ -32,7 +32,7 @@ struct sw_dev {
 };
 
 size_t
-num_devs(struct sw_dev *devs)
+sw_num_devs(struct sw_dev *devs)
 {
 	size_t n = 0;
 	while (devs != NULL) {
@@ -46,7 +46,7 @@ num_devs(struct sw_dev *devs)
  * Frees the constituents of a `struct sw_dev` but not the node itself.
  */
 void
-free_dev(struct sw_dev *d)
+sw_free_dev(struct sw_dev *d)
 {
 	free_item(d->item);
 	//free(d->display); /* XXX: why does this crash with strict malloc flags? */
@@ -54,20 +54,20 @@ free_dev(struct sw_dev *d)
 }
 
 void
-free_devs(struct sw_dev *devs)
+sw_free_devs(struct sw_dev *devs)
 {
 	struct sw_dev *next;
 
 	endwin();
 	while (devs != NULL) {
 		next = devs->next;
-		free_dev(devs);
+		sw_free_dev(devs);
 		devs = next;
 	}
 }
 
 void
-ondesc_cb(void *arg, struct sioctl_desc *desc, int val)
+sw_ondesc_cb(void *arg, struct sioctl_desc *desc, int val)
 {
 	struct sw_dev **devs = arg, *d;
 	(void) val;
@@ -84,7 +84,7 @@ ondesc_cb(void *arg, struct sioctl_desc *desc, int val)
 		d = *devs;
 		if ((*devs)->addr == desc->addr) {
 			*devs = d->next;
-			free_dev(d);
+			sw_free_dev(d);
 			break;
 		}
 	}
@@ -121,7 +121,7 @@ ondesc_cb(void *arg, struct sioctl_desc *desc, int val)
 }
 
 MENU *
-create_menu(struct sw_dev *devs)
+sw_create_menu(struct sw_dev *devs)
 {
 	size_t ndev, i;
 	ITEM **items;
@@ -130,7 +130,7 @@ create_menu(struct sw_dev *devs)
 	struct sw_dev *d;
 
 	/* Create the menu */
-	ndev = num_devs(devs);
+	ndev = sw_num_devs(devs);
 	mwin = newwin(
 	    ndev,   /* height */
 	    MENU_WIDTH, /* width */
@@ -169,7 +169,7 @@ sw_free_menu(MENU *menu)
 }
 
 void
-do_menu(struct sioctl_hdl *hdl)
+sw_do_menu(struct sioctl_hdl *hdl)
 {
 	MENU *menu;
 	int exit = 0, poll_rv, nfds;
@@ -183,7 +183,7 @@ do_menu(struct sioctl_hdl *hdl)
 		err(EXIT_FAILURE, "malloc");
 	}
 
-	if (sioctl_ondesc(hdl, ondesc_cb, &devs) == 0) {
+	if (sioctl_ondesc(hdl, sw_ondesc_cb, &devs) == 0) {
 		endwin();
 		errx(EXIT_FAILURE, "sioctl_desc() failed");
 	}
@@ -193,7 +193,7 @@ do_menu(struct sioctl_hdl *hdl)
 	wbkgd(title_win, COLOR_PAIR(COLPAIR_STATUS));
 	mvwprintw(title_win, 0, 0, "Select default sndio device");
 
-	menu = create_menu(devs);
+	menu = sw_create_menu(devs);
 	post_menu(menu);
 
 	/* Create the bar at the bottom */
@@ -225,7 +225,7 @@ do_menu(struct sioctl_hdl *hdl)
 			 /* Update the device list (calls `ondesc_cb`) */
 			sioctl_revents(hdl, pfds);
 
-			menu = create_menu(devs);
+			menu = sw_create_menu(devs);
 			post_menu(menu);
 			wrefresh(menu_win(menu));
 			refresh();
@@ -263,7 +263,7 @@ do_menu(struct sioctl_hdl *hdl)
 	sw_free_menu(menu);
 	delwin(status_win);
 	delwin(title_win);
-	free_devs(devs);
+	sw_free_devs(devs);
 }
 
 int
@@ -289,7 +289,7 @@ main(int argc, char **argv)
 	init_pair(COLPAIR_MENU_BACK, COLOR_WHITE, COLOR_BLACK);
 	init_pair(COLPAIR_STATUS, COLOR_BLACK, COLOR_BLUE);
 
-	do_menu(hdl);
+	sw_do_menu(hdl);
 
 	endwin();
 	sioctl_close(hdl);
