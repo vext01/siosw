@@ -46,22 +46,22 @@ num_devs(struct sw_dev *devs)
  * Frees the constituents of a `struct sw_dev` but not the node itself.
  */
 void
-free_dev_inner(struct sw_dev *d)
+free_dev(struct sw_dev *d)
 {
 	free_item(d->item);
 	free(d->display);
+	free(d);
 }
 
 void
 free_devs(struct sw_dev **devs)
 {
-	struct sw_dev *old;
+	struct sw_dev *next;
 
 	while (*devs != NULL) {
-		old = *devs;
-		free_dev_inner(old);
-		*devs = (*devs)->next;
-		free(old);
+		next = (*devs)->next;
+		free_dev(*devs);
+		*devs = next;
 	}
 }
 
@@ -83,8 +83,7 @@ ondesc_cb(void *arg, struct sioctl_desc *desc, int val)
 		d = *devs;
 		if ((*devs)->addr == desc->addr) {
 			*devs = d->next;
-			free_dev_inner(d);
-			free(d);
+			free_dev(d);
 			break;
 		}
 	}
