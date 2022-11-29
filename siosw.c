@@ -284,7 +284,10 @@ sw_do_menu(struct sioctl_hdl *hdl)
 		 * device change, then we have to update the menu.
 		 */
 		for (i = 0; i < sio_nfds; i++) {
-			if (sio_pfds[i].revents & POLLIN) {
+			if (sio_pfds[i].revents & POLLHUP) {
+				endwin();
+				errx(EXIT_FAILURE, "lost connection to sndiod");
+			} else if (sio_pfds[i].revents & POLLIN) {
 				/* Device changed. Repopulate menu */
 				unpost_menu(menu);
 				wrefresh(menu_win(menu));
