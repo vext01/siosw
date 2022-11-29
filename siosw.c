@@ -293,7 +293,14 @@ sw_do_menu(struct sioctl_hdl *hdl)
 				wrefresh(menu_win(menu));
 				sw_free_menu(menu);
 
-				/* XXX loop until ondesc called with NULL */
+				/*
+				 * This could be optimised by only updating the
+				 * menu once we see an invocation of the
+				 * callback with a NULL arg (thus marking the
+				 * end of a batch of updates.
+				 *
+				 * It hardly seeems worth it for this program.
+				 */
 				sioctl_revents(hdl, sio_pfds);
 
 				menu = sw_create_menu(&state);
