@@ -31,6 +31,16 @@ struct sw_dev {
 	struct sw_dev *next;
 };
 
+/* The `state` of the menu, passed to (and mutated by) sioctl callbacks */
+struct sw_state {
+	/* Linked list of devices */
+	struct sw_dev *devs;
+	/* Pointer to the status window at the bottom of the screen */
+	WINDOW *status_win;
+	/* The currently active default device */
+	struct sw_dev *cur;
+};
+
 size_t
 sw_num_devs(struct sw_dev *devs)
 {
@@ -42,9 +52,14 @@ sw_num_devs(struct sw_dev *devs)
 	return n;
 }
 
-/*
- * Frees the constituents of a `struct sw_dev` but not the node itself.
- */
+void
+sw_update_status(WINDOW *status_win, char *dev)
+{
+	wclear(status_win);
+	mvwprintw(status_win, 0, 0, "Currently selected device: %s", dev);
+	wrefresh(status_win);
+}
+
 void
 sw_free_dev(struct sw_dev *d)
 {
@@ -58,7 +73,6 @@ sw_free_devs(struct sw_dev *devs)
 {
 	struct sw_dev *next;
 
-	endwin();
 	while (devs != NULL) {
 		next = devs->next;
 		sw_free_dev(devs);
@@ -98,7 +112,8 @@ sw_new_dev(struct sioctl_desc *desc)
 void
 sw_ondesc_cb(void *arg, struct sioctl_desc *desc, int val)
 {
-	struct sw_dev **devs = arg, *d;
+	struct sw_state *state = arg;
+	struct sw_dev **devs = &state->devs, *d;
 	(void) val;
 
 	if (desc == NULL)
@@ -126,10 +141,33 @@ sw_ondesc_cb(void *arg, struct sioctl_desc *desc, int val)
 	d = sw_new_dev(desc);
 	d->next = *devs;
 	*devs = d;
+
+	/* If it's the active device, then update the status window */
+	if (val) {
+		sw_update_status(state->status_win, d->display);
+		state->cur = d;
+	}
+}
+
+void
+sw_onval_cb(void *arg, unsigned addr, unsigned val)
+{
+	struct sw_state *state = arg;
+	struct sw_dev *d;
+
+	/* See if the update is a change of default audio device */
+	for (d = state->devs; d != NULL; d = d->next) {
+		if ((d->addr == addr) && (val)) {
+			sw_update_status(state->status_win, d->display);
+			state->cur = d;
+			break;
+		}
+	}
+	/* If we get here, it was an upate for a control we don't care about */
 }
 
 MENU *
-sw_create_menu(struct sw_dev *devs)
+sw_create_menu(struct sw_state *state)
 {
 	size_t ndev, i;
 	ITEM **items;
@@ -138,7 +176,7 @@ sw_create_menu(struct sw_dev *devs)
 	struct sw_dev *d;
 
 	/* Create the menu */
-	ndev = sw_num_devs(devs);
+	ndev = sw_num_devs(state->devs);
 	mwin = newwin(
 	    ndev,   /* height */
 	    MENU_WIDTH, /* width */
@@ -151,7 +189,7 @@ sw_create_menu(struct sw_dev *devs)
 		endwin();
 		err(EXIT_FAILURE, "malloc");
 	}
-	for (i = 0, d = devs; d != NULL; d = d->next, i++)
+	for (i = 0, d = state->devs; d != NULL; d = d->next, i++)
 		items[i] = d->item;
 	items[ndev] = NULL;
 
@@ -159,6 +197,7 @@ sw_create_menu(struct sw_dev *devs)
 	set_menu_win(menu, mwin);
 	set_menu_fore(menu, COLOR_PAIR(COLPAIR_MENU_FORE) | A_REVERSE);
 	set_menu_back(menu, COLOR_PAIR(COLPAIR_MENU_BACK) | A_REVERSE);
+	set_current_item(menu, state->cur->item);
 
 	return menu;
 }
@@ -181,33 +220,39 @@ sw_do_menu(struct sioctl_hdl *hdl)
 {
 	MENU *menu;
 	int exit = 0, poll_rv, sio_nfds, nfds, i, again;
-	struct sw_dev *devs = NULL;
 	WINDOW *title_win, *status_win;
 	struct pollfd *pfds, *sio_pfds;
+	struct sw_state state;
 
-	if (sioctl_ondesc(hdl, sw_ondesc_cb, &devs) == 0) {
-		endwin();
-		errx(EXIT_FAILURE, "sioctl_desc() failed");
-	}
+	refresh();
 
 	/* Create the bar at the top */
 	title_win = newwin(1, COLS, 0, 0);
 	wbkgd(title_win, COLOR_PAIR(COLPAIR_STATUS));
 	mvwprintw(title_win, 0, 0, "Select default sndio device");
-
-	menu = sw_create_menu(devs);
-	post_menu(menu);
+	wrefresh(title_win);
 
 	/* Create the bar at the bottom */
 	status_win = newwin(1, COLS, LINES - 1, 0);
 	wbkgd(status_win, COLOR_PAIR(COLPAIR_STATUS));
-	mvwprintw(status_win, 0, 0,
-	    "[Return]: change audio device, [q]: exit");
 
-	refresh();
-	wrefresh(title_win);
+	state.devs = NULL; /* empty linked list */
+	state.status_win = status_win;
+
+	if (sioctl_ondesc(hdl, sw_ondesc_cb, &state) == 0) {
+		endwin();
+		errx(EXIT_FAILURE, "sioctl_desc() failed");
+	}
+
+	if (sioctl_onval(hdl, sw_onval_cb, &state) == 0) {
+		endwin();
+		errx(EXIT_FAILURE, "sioctl_onval() failed");
+	}
+
+	/* Draw the first incarnation of the menu */
+	menu = sw_create_menu(&state);
+	post_menu(menu);
 	wrefresh(menu_win(menu));
-	wrefresh(status_win);
 
 	sio_nfds = sioctl_nfds(hdl);
 	nfds = sio_nfds + 1; /* +1 for stdin at index 0 */
@@ -248,7 +293,7 @@ sw_do_menu(struct sioctl_hdl *hdl)
 				/* XXX loop until ondesc called with NULL */
 				sioctl_revents(hdl, sio_pfds);
 
-				menu = sw_create_menu(devs);
+				menu = sw_create_menu(&state);
 				post_menu(menu);
 				wrefresh(menu_win(menu));
 				refresh();
@@ -284,10 +329,9 @@ sw_do_menu(struct sioctl_hdl *hdl)
 					errx(EXIT_FAILURE,
 					    "sioctl_setval() failed");
 				}
-				exit = 1;
 				break;
 			case 'q':
-				mvprintw(LINES - 2, 0, "q");
+			case 27: /* escape */
 				exit = 1;
 				break;
 		}
@@ -298,7 +342,7 @@ sw_do_menu(struct sioctl_hdl *hdl)
 	sw_free_menu(menu);
 	delwin(status_win);
 	delwin(title_win);
-	sw_free_devs(devs);
+	sw_free_devs(state.devs);
 	free(pfds);
 }
 
@@ -318,6 +362,7 @@ main(int argc, char **argv)
 	noecho();
 	curs_set(0);
 	keypad(stdscr, TRUE);
+	ESCDELAY = 0;
 
 	start_color();
 	init_pair(COLPAIR_MENU_FORE, COLOR_YELLOW, COLOR_BLACK);
