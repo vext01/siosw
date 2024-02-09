@@ -195,6 +195,7 @@ sw_create_menu(struct sw_state *state)
 
 	menu = new_menu(items);
 	set_menu_win(menu, mwin);
+	set_menu_sub(menu, mwin);
 	set_menu_fore(menu, COLOR_PAIR(COLPAIR_MENU_FORE) | A_REVERSE);
 	set_menu_back(menu, COLOR_PAIR(COLPAIR_MENU_BACK) | A_REVERSE);
 	set_current_item(menu, state->cur->item);
