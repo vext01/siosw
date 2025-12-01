@@ -5,5 +5,6 @@ all: siosw
 
 sndiosw: siosw.c
 
+.PHONY: clean
 clean:
 	-rm -f siosw
