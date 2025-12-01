@@ -88,7 +88,7 @@ sw_new_dev(struct sioctl_desc *desc)
 	d = malloc(sizeof(struct sw_dev));
 	if (d == NULL) {
 		endwin();
-		err(EXIT_FAILURE, "malloc");
+		err(EXIT_FAILURE, "malloc() failed");
 	}
 
 	d->addr = desc->addr;
@@ -97,7 +97,7 @@ sw_new_dev(struct sioctl_desc *desc)
 	d->display = malloc(MENU_WIDTH);
 	if (d->display == NULL) {
 		endwin();
-		errx(EXIT_FAILURE, "malloc() failed");
+		err(EXIT_FAILURE, "malloc() failed");
 	}
 	memset(d->display, ' ', MENU_WIDTH);
 	strncpy(d->display, desc->display, strlen(desc->display));
@@ -187,7 +187,7 @@ sw_create_menu(struct sw_state *state)
 	items = calloc(ndev + 1, sizeof(ITEM *));
 	if (items == NULL) {
 		endwin();
-		err(EXIT_FAILURE, "malloc");
+		err(EXIT_FAILURE, "calloc() failed");
 	}
 	for (i = 0, d = state->devs; d != NULL; d = d->next, i++)
 		items[i] = d->item;
@@ -242,7 +242,7 @@ sw_do_menu(struct sioctl_hdl *hdl)
 
 	if (sioctl_ondesc(hdl, sw_ondesc_cb, &state) == 0) {
 		endwin();
-		errx(EXIT_FAILURE, "sioctl_desc() failed");
+		errx(EXIT_FAILURE, "sioctl_ondesc() failed");
 	}
 
 	if (sioctl_onval(hdl, sw_onval_cb, &state) == 0) {
@@ -260,7 +260,7 @@ sw_do_menu(struct sioctl_hdl *hdl)
 	pfds = malloc(sizeof(struct pollfd) * nfds);
 	if (pfds == NULL) {
 		endwin();
-		err(EXIT_FAILURE, "malloc");
+		err(EXIT_FAILURE, "malloc() failed");
 	}
 	sio_pfds = pfds + 1;
 
@@ -274,7 +274,7 @@ sw_do_menu(struct sioctl_hdl *hdl)
 		while ((poll_rv = poll(pfds, nfds, INFTIM)) < 0) {
 			if (errno != EINTR) {
 				endwin();
-				err(EXIT_FAILURE, "poll");
+				err(EXIT_FAILURE, "poll() failed");
 			}
 		}
 
